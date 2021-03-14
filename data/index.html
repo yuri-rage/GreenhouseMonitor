@@ -1,0 +1,660 @@
+<!DOCTYPE HTML>
+<html>
+  <!--  Greenhouse Monitor -- Yuri - Mar 2021
+        Web served temperature, humidity, and light level monitoring/logging
+        
+        Based on code by Rui Santos -  https://RandomNerdTutorials.com
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files.
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software. -->
+  <head>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Greenhouse Monitor</title>
+    <meta name="description" content="Greenhouse Monitor">
+    <meta name="author" content="Yuri">
+    <link rel="icon" href="favicon.svg" />
+    <script src="https://code.highcharts.com/highcharts.js"></script>
+    <script src="https://cdn.rawgit.com/Mikhus/canvas-gauges/gh-pages/download/2.1.7/all/gauge.min.js"></script>
+    <style>
+      body {
+        min-width: 310px;
+        max-width: 1000px;
+        margin: 0 auto;
+        background: linear-gradient(rgba(0, 0, 0, 0.8), rgba(0, 0, 0, 0.8)), 
+          url('https://chili-plant.com/chilli-varieties/birds-eye-chili/birdseye-chili.jpg');
+        background-position: center top;
+      }
+      canvas {
+        display: inline-block;
+        text-align: center;
+        padding: 30px 10px 0px 10px;
+      }
+      .gauge-banner {
+        width: 67%;
+        margin: 0 auto;
+        padding-bottom: 10px;
+      }
+      #status-container {
+        width: 100%;
+        height: 100%;
+        position: absolute;
+        top: 0;
+        left: 0;
+        font-family: "Lucida Grande", "Lucida Sans Unicode", Verdana, Arial, Helvetica, sans-serif;
+        font-size: 13px;
+        color: #eee;
+        margin: 0px 10px 0px 10px;
+      }
+      .status-text {
+        color: #999;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="gauge-banner">
+      <div id="status-container">
+        <br>ESP32 Greenhouse Monitor
+        <div class="status-text">
+          <span id="wx-city"></span></br>
+          <span id="wx-temp"></span>&emsp;<span id="wx-humidity"></span></br>
+          <span id="wx-wind"></span></br>
+          <span id="wx-baro"></span></br>
+          <span id="wx-text"></span></br>
+          <span id="status-text">Initializing...</span><br>
+          <span id="debug-text"></span>
+        </div>
+      </div>
+      <canvas id="temp-gauge"></canvas>
+      <canvas id="humidity-gauge"></canvas>
+      <canvas id="light-gauge"></canvas>
+    </div>
+    <div id="chart-temperature" class="container"></div>
+    <div id="chart-humidity" class="container"></div>
+    <div id="chart-light" class="container"></div>
+  </body>
+  <script>
+    
+    var DEBUG_MODE = true;        // set true, "local", or false as desired
+                                     //   "local" will use "http://greenhouse.local" for all server requests instead of "/"
+    var DATALOG_REFRESH_RATE = 300000; // 5 minutes
+    var SENSOR_REFRESH_RATE  =   5000; // 5 seconds
+    var WX_REFRESH_RATE      = 900000; // 15 minutes
+  
+    var gaugeT = new RadialGauge({
+        renderTo: 'temp-gauge',
+        width: 200,
+        height: 200,
+        units: "\u00B0F",
+        title: "Temp",
+        minValue: 20,
+        maxValue: 120,
+        majorTicks: [20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120],
+        minorTicks: 2,
+        strokeTicks: true,
+        highlights: [{
+                "from": 20,
+                "to": 45,
+                "color": "rgba(0, 0, 255, .3)"
+            },
+            {
+                "from": 45,
+                "to": 95,
+                "color": "rgba(0, 255, 0, .3)"
+            },
+            {
+                "from": 95,
+                "to": 120,
+                "color": "rgba(255, 0, 0, .3)"
+            }
+        ],
+        ticksAngle: 225,
+        startAngle: 67.5,
+        colorMajorTicks: "#ddd",
+        colorMinorTicks: "#ddd",
+        colorTitle: "#eee",
+        colorUnits: "#ccc",
+        colorNumbers: "#eee",
+        colorPlate: "rgb(18, 28, 18)",
+        borderShadowWidth: 0,
+        borders: true,
+        needleType: "arrow",
+        needleWidth: 3,
+        needleCircleSize: 7,
+        needleCircleOuter: true,
+        needleCircleInner: false,
+        animationDuration: 1500,
+        animationRule: "linear",
+        colorBorderOuter: "#333",
+        colorBorderOuterEnd: "#111",
+        colorBorderMiddle: "#222",
+        colorBorderMiddleEnd: "#111",
+        colorBorderInner: "#111",
+        colorBorderInnerEnd: "#333",
+        colorNeedle: "#c00",
+        colorNeedleShadowDown: "#333",
+        colorNeedleCircleOuter: "#333",
+        colorNeedleCircleOuterEnd: "#111",
+        colorNeedleCircleInner: "#111",
+        colorNeedleCircleInnerEnd: "#222",
+        fontValueSize: 33,
+        valueInt: 1,
+        valueDec: 1,
+        valueBoxBorderRadius: 2,
+        colorValueBoxRect: "#222",
+        colorValueBoxRectEnd: "#333"
+    }).draw();
+    
+    var gaugeH = new RadialGauge({
+        renderTo: 'humidity-gauge',
+        width: 200,
+        height: 200,
+        units: "% RH",
+        title: "Humidity",
+        minValue: 0,
+        maxValue: 100,
+        majorTicks: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+        minorTicks: 2,
+        strokeTicks: true,
+        highlights: [{
+                "from": 0,
+                "to": 45,
+                "color": "rgba(255, 255, 0, .3)"
+            },
+            {
+                "from": 45,
+                "to": 75,
+                "color": "rgba(0, 255, 0, .3)"
+            },
+            {
+                "from": 75,
+                "to": 100,
+                "color": "rgba(255, 0, 0, .3)"
+            }
+        ],
+        ticksAngle: 225,
+        startAngle: 67.5,
+        colorMajorTicks: "#ddd",
+        colorMinorTicks: "#ddd",
+        colorTitle: "#eee",
+        colorUnits: "#ccc",
+        colorNumbers: "#eee",
+        colorPlate: "rgb(18, 28, 18)",
+        borderShadowWidth: 0,
+        borders: true,
+        needleType: "arrow",
+        needleWidth: 3,
+        needleCircleSize: 7,
+        needleCircleOuter: true,
+        needleCircleInner: false,
+        animationDuration: 1500,
+        animationRule: "linear",
+        colorBorderOuter: "#333",
+        colorBorderOuterEnd: "#111",
+        colorBorderMiddle: "#222",
+        colorBorderMiddleEnd: "#111",
+        colorBorderInner: "#111",
+        colorBorderInnerEnd: "#333",
+        colorNeedle: "#c00",
+        colorNeedleShadowDown: "#333",
+        colorNeedleCircleOuter: "#333",
+        colorNeedleCircleOuterEnd: "#111",
+        colorNeedleCircleInner: "#111",
+        colorNeedleCircleInnerEnd: "#222",
+        fontValueSize: 33,
+        valueInt: 1,
+        valueDec: 1,
+        valueBoxBorderRadius: 2,
+        colorValueBoxRect: "#222",
+        colorValueBoxRectEnd: "#333"
+    }).draw();
+    
+    var gaugeL = new RadialGauge({
+        renderTo: 'light-gauge',
+        width: 200,
+        height: 200,
+        units: "%",
+        title: "Light",
+        minValue: 0,
+        maxValue: 100,
+        majorTicks: [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+        minorTicks: 2,
+        strokeTicks: true,
+        highlights: [{
+                "from": 0,
+                "to": 30,
+                "color": "rgba(0, 0, 255, .3)"
+            },
+            {
+                "from": 30,
+                "to": 100,
+                "color": "rgba(0, 255, 0, .3)"
+            }
+        ],
+        ticksAngle: 225,
+        startAngle: 67.5,
+        colorMajorTicks: "#ddd",
+        colorMinorTicks: "#ddd",
+        colorTitle: "#eee",
+        colorUnits: "#ccc",
+        colorNumbers: "#eee",
+        colorPlate: "rgb(18, 28, 18)",
+        borderShadowWidth: 0,
+        borders: true,
+        needleType: "arrow",
+        needleWidth: 3,
+        needleCircleSize: 7,
+        needleCircleOuter: true,
+        needleCircleInner: false,
+        animationDuration: 1500,
+        animationRule: "linear",
+        colorBorderOuter: "#333",
+        colorBorderOuterEnd: "#111",
+        colorBorderMiddle: "#222",
+        colorBorderMiddleEnd: "#111",
+        colorBorderInner: "#111",
+        colorBorderInnerEnd: "#333",
+        colorNeedle: "#c00",
+        colorNeedleShadowDown: "#333",
+        colorNeedleCircleOuter: "#333",
+        colorNeedleCircleOuterEnd: "#111",
+        colorNeedleCircleInner: "#111",
+        colorNeedleCircleInnerEnd: "#222",
+        fontValueSize: 33,
+        valueInt: 1,
+        valueDec: 1,
+        valueBoxBorderRadius: 2,
+        colorValueBoxRect: "#222",
+        colorValueBoxRectEnd: "#333"
+    }).draw();
+
+    var chartT = new Highcharts.Chart({
+        chart: {
+            renderTo: 'chart-temperature',
+            backgroundColor: 'rgba(0, 0, 0, 0.2)',
+            height: '30%'
+        },
+        title: {
+            text: 'Temperature',
+            style: {
+                fontSize: '14px',
+                color: "#ddd"
+            }
+        },
+        subtitle: {
+            style: {
+                color: "#999"
+            }
+        },
+        series: [{
+            showInLegend: false,
+            data: []
+        }],
+        plotOptions: {
+            line: {
+                animation: false,
+                dataLabels: {
+                    enabled: true,
+                    color: '#999',
+                    style: {
+                        fontSize: '10px',
+                        textOutline: false
+                    }
+                }
+            },
+            series: {
+                color: '#c60'
+            }
+        },
+        xAxis: {
+            type: 'datetime',
+            dateTimeLabelFormats: {
+                second: '%H:%M'
+            },
+            labels: {
+                style: {
+                    color: '#ddd'
+                }
+            }
+        },
+        yAxis: {
+            softMin: 50,
+            softMax: 100,
+            title: {
+                text: 'Temperature (\u00B0F)',
+                style: {
+                    fontSize: '13px',
+                    color: '#ddd'
+                }
+            },
+            labels: {
+                style: {
+                    color: '#ddd'
+                }
+            }
+        },
+        credits: {
+            enabled: false
+        }
+    });
+    
+    var chartH = new Highcharts.Chart({
+        chart: {
+            renderTo: 'chart-humidity',
+            backgroundColor: 'rgba(0, 0, 0, 0.2)',
+            height: '30%'
+        },
+        title: {
+            text: 'Humidity',
+            style: {
+                fontSize: '14px',
+                color: "#ddd"
+            }
+        },
+        subtitle: {
+            style: {
+                color: "#999"
+            }
+        },
+        series: [{
+            showInLegend: false,
+            data: []
+        }],
+        plotOptions: {
+            line: {
+                animation: false,
+                dataLabels: {
+                    enabled: true,
+                    color: '#999',
+                    style: {
+                        fontSize: '10px',
+                        textOutline: false 
+                    }
+                }
+            },
+            series: {
+                color: 'rgb(0, 90, 190)'
+            }
+        },
+        xAxis: {
+            type: 'datetime',
+            dateTimeLabelFormats: {
+                second: '%H:%M'
+            },
+            labels: {
+                style: {
+                    color: '#ddd'
+                }
+            }
+        },
+        yAxis: {
+            softMin: 40,
+            softMax: 80,
+            title: {
+                text: 'Humidity (%)',
+                style: {
+                    fontSize: '13px',
+                    color: '#ddd'
+                }
+            },
+            labels: {
+                style: {
+                    color: '#ddd'
+                }
+            }
+        },
+        credits: {
+            enabled: false
+        }
+    });
+    
+    var chartL = new Highcharts.Chart({
+        chart: {
+            renderTo: 'chart-light',
+            backgroundColor: 'rgba(0, 0, 0, 0.2)',
+            height: '30%'
+        },
+        title: {
+            text: 'Light Level',
+            style: {
+                fontSize: '14px',
+                color: "#ddd"
+            }
+        },
+        subtitle: {
+            style: {
+                color: "#999"
+            }
+        },
+        series: [{
+            showInLegend: false,
+            data: []
+        }],
+        plotOptions: {
+            line: {
+                animation: false,
+                dataLabels: {
+                    enabled: true,
+                    color: '#999',
+                    style: {
+                        fontSize: '10px',
+                        textOutline: false 
+                    }
+                }
+            },
+            series: {
+                color: '#aa0'
+            }
+        },
+        xAxis: {
+            type: 'datetime',
+            dateTimeLabelFormats: {
+                second: '%H:%M'
+            },
+            labels: {
+                style: {
+                    color: '#ddd'
+                }
+            }
+        },
+        yAxis: {
+            min: 0,
+            max: 100,
+            title: {
+                text: 'Light (%)',
+                style: {
+                    fontSize: '13px',
+                    color: '#ddd'
+                }
+            },
+            labels: {
+                style: {
+                    color: '#ddd'
+                }
+            }
+        },
+        credits: {
+            enabled: false
+        }
+    });
+    
+    var numSamples;
+    var sampleTime;
+    var minT;
+    var maxT;
+    var avgT;
+    var minH;
+    var maxH;
+    var avgH;
+    var minL;
+    var maxL;
+    var avgL;
+    var owm;
+
+    function getOWMInfo() {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            if (this.readyState == 4 && this.status == 200) {
+                owm = JSON.parse(this.responseText);
+                refreshLocalWX();
+                setInterval(refreshLocalWX, WX_REFRESH_RATE);
+            }
+        };
+        xhttp.open("GET", urlBase + "owm", true);
+        xhttp.send();
+    }
+    
+    function heading_to_cardinal(heading) {
+        let cardinals = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+                         'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
+        let index = Math.round(heading / (360 / cardinals.length));
+        return cardinals[index % cardinals.length];
+    }
+    
+    function refreshLocalWX() {
+        document.getElementById("status-text").innerHTML = "Refreshing local WX...";
+        var url = "http://api.openweathermap.org/data/2.5/weather?q=" + owm.city + "&appid=" + owm.api_key;
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            if (this.readyState == 4 && this.status == 200) {
+                var wx = JSON.parse(this.responseText);
+                document.getElementById("wx-city").innerHTML = wx.name + " Weather:";
+                document.getElementById("wx-temp").innerHTML = Math.round((wx.main.temp - 273.15) * 9/5 + 32) + "\u00B0F";
+                document.getElementById("wx-humidity").innerHTML = wx.main.humidity + "% RH";
+                document.getElementById("wx-wind").innerHTML = heading_to_cardinal(wx.wind.deg) + " " + Math.round(wx.wind.speed *  1.944) + " knots";
+                document.getElementById("wx-baro").innerHTML = (wx.main.pressure / 33.864).toFixed(2) + " inHg";
+                document.getElementById("wx-text").innerHTML = wx.weather[0].description.replace(/\w\S*/g, (w) => (w.replace(/^\w/, (c) => c.toUpperCase())));
+                document.getElementById("status-text").innerHTML = "";
+            }
+        };
+        xhttp.open("GET", url, true);
+        xhttp.send();
+    }
+
+    function populateCharts(datalog) {
+    
+        while (chartT.series[0].data.length > 0) chartT.series[0].removePoint(0, false, false);
+        while (chartH.series[0].data.length > 0) chartH.series[0].removePoint(0, false, false);
+        while (chartL.series[0].data.length > 0) chartL.series[0].removePoint(0, false, false);
+    
+        var tzOffset = (new Date()).getTimezoneOffset() * 60000;
+        var startTime = -1;
+        var endTime;
+        var idx;
+        var x;
+        var y;
+        var i;
+        numSamples = 0;
+        minT = 200.0;
+        maxT = -100.0;
+        avgT = 0.0;
+        minH = 101.0;
+        maxH = -1.0;
+        avgH = 0.0;
+        minL = 101.0;
+        maxL = -1.0;
+        avgL = 0.0;
+        for (i = 0; i < datalog.data_length; i++) {
+            idx = (datalog.begin_index + i) % datalog.data_length;
+            if (datalog.data[idx].timestamp > 0) {
+                x = datalog.data[idx].timestamp * 1000 - tzOffset;
+                if (startTime < 0) startTime = x;
+                endTime = x;
+                y = Math.round(datalog.data[idx].temperature * 10) / 10;
+                if (y > maxT) maxT = y;
+                if (y < minT) minT = y;
+                avgT += y;
+                chartT.series[0].addPoint([x, y], true, false, true);
+                y = Math.round(datalog.data[idx].humidity * 10) / 10;
+                if (y > maxH) maxH = y;
+                if (y < minH) minH = y;
+                avgH += y;
+                chartH.series[0].addPoint([x, y], true, false, true);
+                y = Math.round(datalog.data[idx].light * 10) / 10;
+                if (y > maxL) maxL = y;
+                if (y < minL) minL = y;
+                avgL += y;
+                chartL.series[0].addPoint([x, y], true, false, true);
+                numSamples++;
+             }
+        }
+        avgT = Math.round(avgT / numSamples * 10) / 10;
+        avgH = Math.round(avgH / numSamples * 10) / 10;
+        avgL = Math.round(avgL / numSamples * 10) / 10;
+        var mins = (endTime - startTime) / 60000;
+        if (mins < 60) {
+            sampleTime = Math.round(mins) + "m";
+        } else {
+            sampleTime = Math.round(mins / 6) / 10 + "hr";
+        }
+    }
+    
+    function refreshDatalog() {
+        document.getElementById("status-text").innerHTML = "Refreshing Datalog";
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            if (this.readyState == 4 && this.status == 200) {
+
+                var json = JSON.parse(this.responseText);
+                populateCharts(json);
+                document.getElementById("status-text").innerHTML = "";
+            };
+        };
+        xhttp.open("GET", urlBase + "datalog", true);
+        xhttp.send();
+    }
+
+    function refreshSensors() {
+        var xhttp = new XMLHttpRequest();
+        xhttp.onreadystatechange = function() {
+            if (this.readyState == 4 && this.status == 200) {
+
+                var json = JSON.parse(this.responseText);
+                var t = Math.round(json.temperature * 10) / 10;
+                var h = Math.round(json.humidity * 10) / 10;
+                var l = Math.round(json.light * 10) / 10;
+                
+                if (t < minT) minT = t;
+                if (t > maxT) maxT = t;
+                if (h < minH) minH = h;
+                if (h > maxH) maxH = h;
+                if (l < minL) minL = l;
+                if (l > maxL) maxL = l;
+                
+                gaugeT.value = t;
+                chartT.setTitle(null, {text: 'Current: ' + t + '\u00B0F &emsp;&emsp; ' + 
+                                       sampleTime + ' Min: ' + minT + '\u00B0F &emsp;&emsp; ' +
+                                       sampleTime + ' Avg: ' + avgT + '\u00B0F &emsp;&emsp; ' +
+                                       sampleTime + ' Max: ' + maxT + '\u00B0F'});
+                                       
+                gaugeH.value = h;
+                chartH.setTitle(null, {text: 'Current: ' + h + '% &emsp;&emsp; ' + 
+                                       sampleTime + ' Min: ' + minH + '% &emsp;&emsp; ' +
+                                       sampleTime + ' Avg: ' + avgH + '% &emsp;&emsp; ' +
+                                       sampleTime + ' Max: ' + maxH + '%'});
+
+                gaugeL.value = l;
+                chartL.setTitle(null, {text: 'Current: ' + l + '% &emsp;&emsp; ' + 
+                                       sampleTime + ' Min: ' + minL + '% &emsp;&emsp; ' +
+                                       sampleTime + ' Avg: ' + avgL + '% &emsp;&emsp; ' +
+                                       sampleTime + ' Max: ' + maxL + '%'});
+                if (DEBUG_MODE) {
+                    document.getElementById("debug-text").innerHTML = "Free Heap: " + json.free_heap;
+                }
+            }
+        };
+        xhttp.open("GET", urlBase + "sensors", true);
+        xhttp.send();
+    }
+    
+    var urlBase = (DEBUG_MODE == "local") ? 'http://greenhouse.local/' : '/';
+
+    getOWMInfo();
+    refreshDatalog();
+    setInterval(refreshDatalog, DATALOG_REFRESH_RATE);
+    refreshSensors();
+    setInterval(refreshSensors, SENSOR_REFRESH_RATE);
+
+  </script>
+</html>
