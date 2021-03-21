@@ -28,36 +28,63 @@ class Data : public Sensor {
     void jsonifyLog(String&);
     void jsonifySensorData(String&);
     void jsonifyConfigData(String&);
+#ifdef BME280
+    // adding pressure to the datalog tends to bog AJAX requests, so store it separately
+    void jsonifyPLog(String&);
   private:
+    DynamicJsonDocument _docPLog;
+    JsonObject _docPRoot;
+    JsonArray _docPArray;
+#else
+  private:
+#endif
     int _index = MAX_LOG_ENTRIES - 1;
-    DynamicJsonDocument _doc;
-    JsonObject _docRoot;
-    JsonArray _docArray;
+    DynamicJsonDocument _docLog;
+    JsonObject _docLogRoot;
+    JsonArray _docLogArray;
     DynamicJsonDocument _sensorDoc;
     DynamicJsonDocument _configDoc;
     unsigned long _getTime();
 };
 
 
-Data::Data():Sensor(), _doc(0), _sensorDoc(0), _configDoc(0) {}
+Data::Data():Sensor(), _docLog(0),
+                       _sensorDoc(0),
+                       _configDoc(0)
+#ifdef BME280
+                     , _docPLog(0)
+#endif
+                       {}
 
-Data::Data(int light_pin):Sensor(light_pin), _doc(MAX_LOG_ENTRIES * 100),  // *should* hold up to MAX_LOG_ENTRIES≈200
+Data::Data(int light_pin):Sensor(light_pin), _docLog(MAX_LOG_ENTRIES * 100),  // *should* hold up to MAX_LOG_ENTRIES≈200
                                              _sensorDoc(128),
-                                             _configDoc(128) {}
+                                             _configDoc(128)
+#ifdef BME280
+                                           , _docPLog(MAX_LOG_ENTRIES * 50)
+#endif
+                                             {}
 
 void Data::begin() {
-  _docRoot = _doc.to<JsonObject>();
-  _docRoot["data_length"] = MAX_LOG_ENTRIES;
-  _docRoot["begin_index"] = 0;
-  _docArray = _docRoot.createNestedArray("data");
+  _docLogRoot = _docLog.to<JsonObject>();
+  _docLogRoot["data_length"] = MAX_LOG_ENTRIES;
+  _docLogRoot["begin_index"] = 0;
+  _docLogArray = _docLogRoot.createNestedArray("data");
+#ifdef BME280
+  _docPRoot = _docPLog.to<JsonObject>();
+  _docPRoot["data_length"] = MAX_LOG_ENTRIES;
+  _docPRoot["begin_index"] = 0;
+  _docPArray = _docPRoot.createNestedArray("data");
+#endif
   for (int i = 0; i < MAX_LOG_ENTRIES ; i++) {
-    JsonObject entry = _docArray.createNestedObject();
+    JsonObject entry = _docLogArray.createNestedObject();
     entry["timestamp"] = 0;
     entry["temperature"] = 0;
     entry["humidity"] = 0;
     entry["light"] = 0;
 #ifdef BME280
-    entry["pressure"] = 0;
+    JsonObject entryP = _docPArray.createNestedObject();
+    entryP["timestamp"] = 0;
+    entryP["pressure"] = 0;
 #endif
   }
   Sensor::begin();
@@ -65,19 +92,27 @@ void Data::begin() {
 
 void Data::log() {
   _index = (_index + 1) % MAX_LOG_ENTRIES;
-  _docArray[_index]["timestamp"]   = this->_getTime();
-  _docArray[_index]["temperature"] = this->temperature();
-  _docArray[_index]["humidity"]    = this->humidity();
-  _docArray[_index]["light"]       = this->light();
+  _docLogArray[_index]["timestamp"]   = this->_getTime();
+  _docLogArray[_index]["temperature"] = this->temperature();
+  _docLogArray[_index]["humidity"]    = this->humidity();
+  _docLogArray[_index]["light"]       = this->light();
+  _docLogRoot["begin_index"] = (_index + 1) % MAX_LOG_ENTRIES;  // this is the oldest entry
 #ifdef BME280
-  _docArray[_index]["pressure"]    = this->pressure();
+  _docPArray[_index]["timestamp"]   = this->_getTime();
+  _docPArray[_index]["pressure"]      = this->pressure();
+  _docPRoot["begin_index"] = (_index + 1) % MAX_LOG_ENTRIES;  // this is the oldest entry
 #endif
-  _docRoot["begin_index"] = (_index + 1) % MAX_LOG_ENTRIES;  // this is the oldest entry
 }
 
 void Data::jsonifyLog(String &s) {
-  serializeJson(_docRoot, s);
+  serializeJson(_docLogRoot, s);
 }
+
+#ifdef BME280
+void Data::jsonifyPLog(String &s) {
+  serializeJson(_docPRoot, s);
+}
+#endif
 
 void Data::jsonifySensorData(String &s) {
   JsonObject root = _sensorDoc.to<JsonObject>();

@@ -31,7 +31,7 @@ void Web_Server::begin() {
 
   this->onNotFound([](AsyncWebServerRequest *request){
     Serial.print(F("Bad request, sending 404..."));
-    request->send(404, "text/plain", "404...that's a hard no, superchief.");
+    request->send(404, "text/plain", F("404...that's a hard no, super chief."));
     Serial.println(F("SENT"));
   });
   this->on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -67,7 +67,7 @@ void Web_Server::begin() {
   });
 #ifdef BME280
   this->on("/pressure", HTTP_GET, [](AsyncWebServerRequest *request){
-    Serial.print(F("Light requested..."));
+    Serial.print(F("Pressure requested..."));
     char buf[7];
     dtostrf(_data->pressure(), 3, 1, buf);
     request->send_P(200, "text/plain", buf);
@@ -98,6 +98,16 @@ void Web_Server::begin() {
     request->send(200, "application/json", response);
     Serial.println(F("SENT"));
   });
+
+#ifdef BME280
+  this->on("/pressurelog", HTTP_GET, [](AsyncWebServerRequest *request) {
+    Serial.print(F("Pressure log requested..."));
+    String response;
+    _data->jsonifyPLog(response);
+    request->send(200, "application/json", response);
+    Serial.println(F("SENT"));
+  });
+#endif
 
 #ifdef _DEBUG_MODE
   // this allows requests from locally stored documents on the client device
