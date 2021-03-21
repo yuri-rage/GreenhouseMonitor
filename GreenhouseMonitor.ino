@@ -3,14 +3,21 @@
  * 
  * Web served temperature, humidity, and light level monitoring/logging
  * 
- * Hardware used: ESP32 Dev Board (ESP32-specific libraries are used)
- *                Sparkfun HTU21D Breakout
+ * Hardware used: ESP32 Dev Board (see note below)
+ *                SSD1306 128*64 OLED
+ *                Sparkfun HTU21D Breakout or Adafruit BME280 Breakout
  *                Simple LDR photoresistor (with an LED dimming sticker applied)
  *                  The light value is neither calibrated nor linear,
  *                  but it seems reasonably useful for this case.
- *                SSD1306 128*64 OLED
  *                
- * Dependencies: SparkFunHTU21D    - Arduino IDE Library Manager
+ *                Note: This sketch will not comppile for an ESP8266 or Arduino
+ *                      variant.  It *should* be trivial to refactor for other
+ *                      boards, but code modification would be necessary, since
+ *                      this sketch relies on ESP32-centric functions and dependencies.
+ *                
+ * Dependencies: SparkFunHTU21D    - Arduino IDE Library Manager (if using HTU21D)
+ *               Adafruit_Sensor   - Arduino IDE Library Manager (if using BME280)
+ *               Adafruit_BME280   - Arduino IDE Library Manager (if using BME280)
  *               SSD1306Ascii      - Arduino IDE Library Manager
  *               ArduinoJson       - Arduino IDE Library Manager
  *               ESPAsyncWebServer - https://github.com/me-no-dev/ESPAsyncWebServer
@@ -31,39 +38,38 @@
     for a 12 hour datalog, use a log interval of 15 mins with 49 entries (48 + 1 to account for total time elapsed)
     30 mins for 24 hrs, 60 mins for 48 hrs
   poll intervals faster than a few seconds may slightly heat the sensor and cause erroneous readings */
+//#define _DEBUG_MODE         // uncomment this line to include debug features
 #define HOSTNAME "greenhouse" // <HOSTNAME>.local *should* work for mDNS browsing
+#define TCP_PORT           80 // TCP port for ESPAsyncWebServer (80)
 #define MAX_LOG_ENTRIES    49 // max number of entries in the datalog 
 #define LOG_INTERVAL       15 // minutes between datalog entries
 #define POLL_INTERVAL       5 // seconds between sensor readings
 #define OLED_I2C         0x3C // display I2C address
-#define _DEBUG_MODE         // comment this line to compile without extra debug features
+#define LIGHT_PIN          A0 // analog pin for photoresistor (LDR)
+#define IMPERIAL              // comment this line to use metric units
+#define BME280                // comment this line if using HTU21D
+
+// if using BME280 and you want to approximate local relative pressure,
+//   enter local elevation above sea level
+#define ELEVATION         586 // feet if using Imperial units, otherwise meters
+
+// if you've calibrated your HTU21D or BME280 against known temp/humidity values,
+//   uncomment these lines as needed to apply fixed correction(s) to the sensor return values
+#define TEMP_OFFSET      -5.0
+#define HUMIDITY_OFFSET   4.4
 
 #include <Wire.h>
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <SPIFFS.h>
-#include <SparkFunHTU21D.h>  // verified against a more complex library that the HTU21D
-                             //   heater is defaulted to off in this library
-                             //   still, the temp value seems a 1-3° high,
-                             //   and the humidity seems a tad low
-                             //   I may take some measurements and simply hard code some offsets
 #include <SSD1306Ascii.h>
 #include <SSD1306AsciiWire.h>
 
-// globals - maybe I'll refactor to make this less ugly (they should likely be in a class object)
-//           for now, they are referenced by the locally imported files below
-float temp;
-float humidity;
-float light;
-const int ldrPin = A0;
-HTU21D htu21;
-SSD1306AsciiWire oled;
-const char* ntpServer          = "pool.ntp.org";
-const long  gmtOffset_sec      = 0; // -21600;  // America/CST
-const int   daylightOffset_sec = 0; // 3600;    // use DST
+#include "auth.h"        // edit auth.h with your own wifi and OpenWeatherMap info
+#include "web_server.h"
 
-#include "auth.h"       // edit auth.h with your own wifi and OpenWeatherMap info
-#include "webserver.h"
+SSD1306AsciiWire oled;
+Web_Server server(TCP_PORT, LIGHT_PIN);
 
 boolean connectWiFi(int timeout) {
   unsigned long startMillis = millis();
@@ -87,10 +93,10 @@ void setup(){
 
   Serial.println(F("\n\n*****    Configuring Greenhouse Monitor    *****\n"));
 
-  Serial.print(F("  Initializing sensors and datalogger..."));
-  htu21.begin();
+  Serial.print(F("  Initializing display..."));
+  Wire.begin();
+  Wire.setClock(400000L);
   oled.begin(&Adafruit128x64, OLED_I2C);
-  initJsonDoc();
   Serial.println(F("DONE\n"));
 
   oled.setFont(lcd5x7);
@@ -127,21 +133,20 @@ void setup(){
   Serial.println(F("STARTED\n"));
 
   Serial.print(F("  Setting time from NTP..."));
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+  configTime(0, 0, "pool.ntp.org");              // set clock to UTC
   Serial.println(F("SET\n"));
 
-  Serial.print(F("  Starting web server..."));
-  initWebServer();
-  MDNS.addService("http", "tcp", 80);
+  Serial.println(F("  Starting data services:"));
+  server.begin();
+  MDNS.addService("http", "tcp", TCP_PORT);
 
-  Serial.printf("ACTIVE ON %s / %s.local\n", WiFi.localIP().toString().c_str(), WiFi.getHostname());
+  Serial.printf("\n  Access via: %s / %s.local\n", WiFi.localIP().toString().c_str(), WiFi.getHostname());
   oled.clear();
   oled.printf("IP  : %s\nHost: %s", WiFi.localIP().toString().c_str(), WiFi.getHostname());
 
   delay(100);
   
-  Serial.println(F("\n*****        Configuration Complete!       *****"));
-  Serial.println(F("\nMonitoring..."));
+  Serial.println(F("\n*****        Configuration Complete!       *****\n"));
 }
 
 unsigned long last_log_millis = 0;
@@ -151,20 +156,15 @@ void loop(){
   unsigned long esp_millis = millis();
 
   if (esp_millis - last_poll_millis > POLL_INTERVAL * 1000 || last_poll_millis == 0) {
-    float t = htu21.readTemperature();
-    float h = htu21.readHumidity();
-    light = analogRead(ldrPin) / 40.95;
 
-    // occasionally htu21 reports erroneously high values (1828°F with 998% humidity)
-    if (temp < 200.0 && humidity < 200.0) {
+    if (server.data->poll()) {
       char buf[18];
       char valBuf[4];
-      humidity = h + (25.0 - t) * -0.15;  // compensation values from HTU21D datasheet
-      temp = t * 1.8 + 32.0;              // to Fahrenheit because 'Murica I suppose...
+
       last_poll_millis = esp_millis;
       oled.setFont(CalLite24);
       oled.setCursor(0, 2);
-      dtostrf(temp, 3, 0, valBuf);
+      dtostrf(server.data->temperature(), 3, 0, valBuf);
       oled.print(valBuf);
       oled.setFont(lcd5x7);
       oled.setLetterSpacing(3);
@@ -172,13 +172,14 @@ void loop(){
                            //   if RAM and performance were a bigger concern, loading these fonts
                            //   so often (and using more than one) would be a terrible idea
       oled.setFont(CalLite24);
-      strcpy(buf, "F ");
-      dtostrf(humidity, 3, 0, valBuf);
+      strcpy(buf, TEMP_UNIT);
+      strcat(buf, " ");
+      dtostrf(server.data->humidity(), 3, 0, valBuf);
       strcat(buf, valBuf);
       strcat(buf, "% ");
       oled.print(buf);
       oled.setFont(Arial_bold_14);
-      int iLight = round(light);
+      int iLight = round(server.data->light());
       sprintf(buf, "   Light: %d%%   ", iLight);
       size_t size = oled.strWidth(buf);
       oled.setCursor((oled.displayWidth() - size) / 2, 6);  // centered text
@@ -188,7 +189,7 @@ void loop(){
   
   if (esp_millis - last_log_millis > LOG_INTERVAL * 60000 || last_log_millis == 0) {
     Serial.print(F("Logging data..."));
-    logData(temp, humidity, light);
+    server.data->log();
     last_log_millis = esp_millis;
     Serial.println(F("DONE"));
   }
