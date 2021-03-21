@@ -587,28 +587,22 @@
     var maxP;
     var avgP;
 
-    var urlBase = (DEBUG_MODE == "local") ? 'http://greenhouse.local/' : '/';
+    var urlBase = (DEBUG_MODE == "local") ? 'http://10.69.69.113/' : '/';
     var configData;
     var includePressure = false;
     getConfigData();
 
-    function getConfigData() {
-        var xhttp = new XMLHttpRequest();
-        xhttp.onreadystatechange = function() {
-            if (this.readyState == 4 && this.status == 200) {
-                configData = JSON.parse(this.responseText);
-                if (configData.hasOwnProperty('press_unit')) includePressure = true;
-                renderElements();
-                refreshLocalWX();
-                setInterval(refreshLocalWX, WX_REFRESH_RATE);
-                refreshDatalog();
-                setInterval(refreshDatalog, DATALOG_REFRESH_RATE);
-                refreshSensors();
-                setInterval(refreshSensors, SENSOR_REFRESH_RATE);
-            }
-        };
-        xhttp.open("GET", urlBase + "configdata", true);
-        xhttp.send();
+    async function getConfigData() {
+        const response = await fetch(urlBase + "configdata");
+        configData = await response.json();
+        if (configData.hasOwnProperty('press_unit')) includePressure = true;
+        renderElements();
+        refreshLocalWX();
+        setInterval(refreshLocalWX, WX_REFRESH_RATE);
+        refreshDatalog();
+        setInterval(refreshDatalog, DATALOG_REFRESH_RATE);
+        refreshSensors();
+        setInterval(refreshSensors, SENSOR_REFRESH_RATE);
     }
     
     function heading_to_cardinal(heading) {
@@ -618,42 +612,30 @@
         return cardinals[index % cardinals.length];
     }
     
-    function refreshLocalWX() {
+    async function refreshLocalWX() {
         document.getElementById("status-text").innerHTML = "Refreshing local WX...";
         var url = "http://api.openweathermap.org/data/2.5/weather?q=" + configData.city + "&appid=" + configData.api_key;
-        var xhttp = new XMLHttpRequest();
-        xhttp.onreadystatechange = function() {
-            if (this.readyState == 4 && this.status == 200) {
-                var wx = JSON.parse(this.responseText);
-                document.getElementById("wx-city").innerHTML = wx.name + " Weather:";
-                if (configData.temp_unit == "F") {
-                    document.getElementById("wx-temp").innerHTML = Math.round((wx.main.temp - 273.15) * 9/5 + 32) + "\u00B0F";
-                    document.getElementById("wx-baro").innerHTML = (wx.main.pressure / 33.864).toFixed(2) + " inHg";
-                } else {
-                    document.getElementById("wx-temp").innerHTML = Math.round(wx.main.temp - 273.15) + "\u00B0C";
-                    document.getElementById("wx-baro").innerHTML = Math.round(wx.main.pressure) + " mb";
-                }
-                document.getElementById("wx-humidity").innerHTML = wx.main.humidity + "% RH";
-                document.getElementById("wx-wind").innerHTML = heading_to_cardinal(wx.wind.deg) + " " + Math.round(wx.wind.speed *  1.944) + " knots";
-                
-                
-
-                document.getElementById("wx-text").innerHTML = wx.weather[0].description.replace(/\w\S*/g, (w) => (w.replace(/^\w/, (c) => c.toUpperCase())));
-                document.getElementById("status-text").innerHTML = "";
-            }
-        };
-        xhttp.open("GET", url, true);
-        xhttp.send();
+        const response = await fetch(url);
+        const wx = await response.json();
+        document.getElementById("wx-city").innerHTML = wx.name + " Weather:";
+        if (configData.temp_unit == "F") {
+            document.getElementById("wx-temp").innerHTML = Math.round((wx.main.temp - 273.15) * 9/5 + 32) + "\u00B0F";
+            document.getElementById("wx-baro").innerHTML = (wx.main.pressure / 33.864).toFixed(2) + " inHg";
+        } else {
+            document.getElementById("wx-temp").innerHTML = Math.round(wx.main.temp - 273.15) + "\u00B0C";
+            document.getElementById("wx-baro").innerHTML = Math.round(wx.main.pressure) + " mb";
+        }
+        document.getElementById("wx-humidity").innerHTML = wx.main.humidity + "% RH";
+        document.getElementById("wx-wind").innerHTML = heading_to_cardinal(wx.wind.deg) + " " + Math.round(wx.wind.speed *  1.944) + " knots";
+        document.getElementById("wx-text").innerHTML = wx.weather[0].description.replace(/\w\S*/g, (w) => (w.replace(/^\w/, (c) => c.toUpperCase())));
+        document.getElementById("status-text").innerHTML = "";
     }
 
-    function populateCharts(datalog) {
+    async function populateCharts(datalog) {
     
         while (chartT.series[0].data.length > 0) chartT.series[0].removePoint(0, false, false);
         while (chartH.series[0].data.length > 0) chartH.series[0].removePoint(0, false, false);
         while (chartL.series[0].data.length > 0) chartL.series[0].removePoint(0, false, false);
-        if (includePressure) {
-            while (chartP.series[0].data.length > 0) chartL.series[0].removePoint(0, false, false);
-        }
     
         var tzOffset = (new Date()).getTimezoneOffset() * 60000;
         var startTime = -1;
@@ -672,9 +654,7 @@
         minL = 101.0;
         maxL = -1.0;
         avgL = 0.0;
-        minP = 2000.0;
-        maxP = -1.0;
-        avgP = 0.0;
+        
         for (i = 0; i < datalog.data_length; i++) {
             idx = (datalog.begin_index + i) % datalog.data_length;
             if (datalog.data[idx].timestamp > 0) {
@@ -696,108 +676,126 @@
                 if (y < minL) minL = y;
                 avgL += y;
                 chartL.series[0].addPoint([x, y], true, false, true);
-                if (includePressure) {
-                    if (configData.press_unit == "mb") {
-                        y = Math.round(datalog.data[idx].pressure);
-                    } else {
-                        y = Math.round(datalog.data[idx].pressure * 100) / 100;
-                    }
-                    if (y > maxP) maxP = y;
-                    if (y < minP) minP = y;
-                    avgP += y;
-                    chartP.series[0].addPoint([x, y], true, false, true);
-                }
                 numSamples++;
              }
         }
         avgT = Math.round(avgT / numSamples * 10) / 10;
         avgH = Math.round(avgH / numSamples * 10) / 10;
         avgL = Math.round(avgL / numSamples * 10) / 10;
-        if (includePressure) {
-            if (configData.press_unit == "mb") {
-                avgP = Math.round(avgP / numSamples);
-            } else {
-                avgP = Math.round(avgP / numSamples * 100) / 100;
-            }
-        }
+
         var mins = (endTime - startTime) / 60000;
         if (mins < 60) {
             sampleTime = Math.round(mins) + "m";
         } else {
             sampleTime = Math.round(mins / 6) / 10 + "hr";
         }
+        if (includePressure) {
+            refreshPressureLog();
+        } else {
+            document.getElementById("status-text").innerHTML = "";
+        }
+    }
+
+    async function populatePChart(datalog) {
+    
+        while (chartP.series[0].data.length > 0) chartP.series[0].removePoint(0, false, false);
+    
+        var tzOffset = (new Date()).getTimezoneOffset() * 60000;
+        var idx;
+        var x;
+        var y;
+        var i;
+        minP = 2000.0;
+        maxP = -1.0;
+        avgP = 0.0;
+        
+        for (i = 0; i < datalog.data_length; i++) {
+            idx = (datalog.begin_index + i) % datalog.data_length;
+            if (datalog.data[idx].timestamp > 0) {
+                x = datalog.data[idx].timestamp * 1000 - tzOffset;
+                if (configData.press_unit == "mb") {
+                    y = Math.round(datalog.data[idx].pressure);
+                } else {
+                    y = Math.round(datalog.data[idx].pressure * 100) / 100;
+                }
+                if (y > maxP) maxP = y;
+                if (y < minP) minP = y;
+                avgP += y;
+                chartP.series[0].addPoint([x, y], true, false, true);
+             }
+        }
+        if (configData.press_unit == "mb") {
+            avgP = Math.round(avgP / numSamples);
+        } else {
+            avgP = Math.round(avgP / numSamples * 100) / 100;
+        }
+        document.getElementById("status-text").innerHTML = "";
     }
     
-    function refreshDatalog() {
+    async function refreshDatalog() {
         document.getElementById("status-text").innerHTML = "Refreshing Datalog";
-        var xhttp = new XMLHttpRequest();
-        xhttp.onreadystatechange = function() {
-            if (this.readyState == 4 && this.status == 200) {
-
-                var json = JSON.parse(this.responseText);
-                populateCharts(json);
-                document.getElementById("status-text").innerHTML = "";
-            };
-        };
-        xhttp.open("GET", urlBase + "datalog", true);
-        xhttp.send();
+        const response = await fetch(urlBase + "datalog");
+        const json = await response.json();
+        populateCharts(json);
+    }
+    
+    // baro pressure has its own datalog because for some reason including it in the main log
+    //   really bogged things down during AJAX requests and processing
+    async function refreshPressureLog() {
+        document.getElementById("status-text").innerHTML = "Refreshing Datalog";
+        const response = await fetch(urlBase + "pressurelog");
+        const json = await response.json();
+        populatePChart(json);
     }
 
-    function refreshSensors() {
-        var xhttp = new XMLHttpRequest();
-        xhttp.onreadystatechange = function() {
-            if (this.readyState == 4 && this.status == 200) {
+    async function refreshSensors() {
+        const response = await fetch(urlBase + "sensors");
+        const json = await response.json();
+        var t = Math.round(json.temperature * 10) / 10;
+        var h = Math.round(json.humidity * 10) / 10;
+        var l = Math.round(json.light * 10) / 10;
+        
+        if (t < minT) minT = t;
+        if (t > maxT) maxT = t;
+        if (h < minH) minH = h;
+        if (h > maxH) maxH = h;
+        if (l < minL) minL = l;
+        if (l > maxL) maxL = l;
+        
+        gaugeT.value = t;
+        chartT.setTitle(null, {text: 'Current: ' + t + '\u00B0' + configData.temp_unit + ' &emsp;&emsp; ' + 
+                               sampleTime + ' Min: ' + minT + '\u00B0' + configData.temp_unit + ' &emsp;&emsp; ' +
+                               sampleTime + ' Avg: ' + avgT + '\u00B0' + configData.temp_unit + ' &emsp;&emsp; ' +
+                               sampleTime + ' Max: ' + maxT + '\u00B0' + configData.temp_unit});
+                               
+        gaugeH.value = h;
+        chartH.setTitle(null, {text: 'Current: ' + h + '% &emsp;&emsp; ' + 
+                               sampleTime + ' Min: ' + minH + '% &emsp;&emsp; ' +
+                               sampleTime + ' Avg: ' + avgH + '% &emsp;&emsp; ' +
+                               sampleTime + ' Max: ' + maxH + '%'});
 
-                var json = JSON.parse(this.responseText);
-                var t = Math.round(json.temperature * 10) / 10;
-                var h = Math.round(json.humidity * 10) / 10;
-                var l = Math.round(json.light * 10) / 10;
-                
-                if (t < minT) minT = t;
-                if (t > maxT) maxT = t;
-                if (h < minH) minH = h;
-                if (h > maxH) maxH = h;
-                if (l < minL) minL = l;
-                if (l > maxL) maxL = l;
-                
-                gaugeT.value = t;
-                chartT.setTitle(null, {text: 'Current: ' + t + '\u00B0' + configData.temp_unit + ' &emsp;&emsp; ' + 
-                                       sampleTime + ' Min: ' + minT + '\u00B0' + configData.temp_unit + ' &emsp;&emsp; ' +
-                                       sampleTime + ' Avg: ' + avgT + '\u00B0' + configData.temp_unit + ' &emsp;&emsp; ' +
-                                       sampleTime + ' Max: ' + maxT + '\u00B0' + configData.temp_unit});
-                                       
-                gaugeH.value = h;
-                chartH.setTitle(null, {text: 'Current: ' + h + '% &emsp;&emsp; ' + 
-                                       sampleTime + ' Min: ' + minH + '% &emsp;&emsp; ' +
-                                       sampleTime + ' Avg: ' + avgH + '% &emsp;&emsp; ' +
-                                       sampleTime + ' Max: ' + maxH + '%'});
-
-                gaugeL.value = l;
-                chartL.setTitle(null, {text: 'Current: ' + l + '% &emsp;&emsp; ' + 
-                                       sampleTime + ' Min: ' + minL + '% &emsp;&emsp; ' +
-                                       sampleTime + ' Avg: ' + avgL + '% &emsp;&emsp; ' +
-                                       sampleTime + ' Max: ' + maxL + '%'});
-                if (includePressure) {
-                    var p
-                    if (configData.press_unit == 'mb') {
-                        p = Math.round(json.pressure);
-                    } else {
-                        p = Math.round(json.pressure * 100) / 100;
-                    }
-                    if (p < minP) minP = p;
-                    if (p > maxP) maxP = p;
-                    chartP.setTitle(null, {text: 'Current: ' + p + ' ' + configData.press_unit + ' &emsp;&emsp; ' + 
-                                           sampleTime + ' Min: ' + minP + ' ' + configData.press_unit + ' &emsp;&emsp; ' +
-                                           sampleTime + ' Avg: ' + avgP + ' ' + configData.press_unit + ' &emsp;&emsp; ' +
-                                           sampleTime + ' Max: ' + maxP + ' ' + configData.press_unit});
-                }
-                if (DEBUG_MODE) {
-                    document.getElementById("debug-text").innerHTML = "Free Heap: " + json.free_heap;
-                }
+        gaugeL.value = l;
+        chartL.setTitle(null, {text: 'Current: ' + l + '% &emsp;&emsp; ' + 
+                               sampleTime + ' Min: ' + minL + '% &emsp;&emsp; ' +
+                               sampleTime + ' Avg: ' + avgL + '% &emsp;&emsp; ' +
+                               sampleTime + ' Max: ' + maxL + '%'});
+        if (includePressure) {
+            var p
+            if (configData.press_unit == 'mb') {
+                p = Math.round(json.pressure);
+            } else {
+                p = Math.round(json.pressure * 100) / 100;
             }
-        };
-        xhttp.open("GET", urlBase + "sensors", true);
-        xhttp.send();
+            if (p < minP) minP = p;
+            if (p > maxP) maxP = p;
+            chartP.setTitle(null, {text: 'Current: ' + p + ' ' + configData.press_unit + ' &emsp;&emsp; ' + 
+                                   sampleTime + ' Min: ' + minP + ' ' + configData.press_unit + ' &emsp;&emsp; ' +
+                                   sampleTime + ' Avg: ' + avgP + ' ' + configData.press_unit + ' &emsp;&emsp; ' +
+                                   sampleTime + ' Max: ' + maxP + ' ' + configData.press_unit});
+        }
+        if (DEBUG_MODE) {
+            document.getElementById("debug-text").innerHTML = "Free Heap: " + json.free_heap;
+        }
     }
 
   </script>
