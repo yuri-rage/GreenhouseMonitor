@@ -11,8 +11,12 @@
  * 
  * -- Yuri - Mar 2021
 *********************************************************************************/
+#ifndef AUTH_H
+#define AUTH_H
 
 const char* ssid     = "SSID";
 const char* password = "password";
 const char* owm_key  = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
 const char* owm_city = "Somerset,MA,US";  // or like "Ivrea/IT"
+
+#endif // AUTH_H
